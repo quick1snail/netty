@@ -240,6 +240,8 @@ public final class NioEventLoop extends SingleThreadEventLoop {
             return new SelectorTuple(unwrappedSelector);
         }
 
+        //1-调用NIO
+
         // 获得 SelectorImpl 类
         Object maybeSelectorImplClass = AccessController.doPrivileged(new PrivilegedAction<Object>() {
             @Override
@@ -291,7 +293,9 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                     }
 
                     // 设置 SelectedSelectionKeySet 对象到 unwrappedSelector 的 Field 中
+                    // unwrappedSelector是从jdk-nio获得的Selector对象。将该对象的selectedKeys成员，设置为这里的selectedKeySet
                     selectedKeysField.set(unwrappedSelector, selectedKeySet);
+                    //同上
                     publicSelectedKeysField.set(unwrappedSelector, selectedKeySet);
                     return null;
                 } catch (NoSuchFieldException e) {
@@ -301,6 +305,8 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                 }
             }
         });
+
+        //到这就完成：
 
         // 设置 SelectedSelectionKeySet 对象到 unwrappedSelector 中失败，则直接返回 SelectorTuple 对象。即，selector 也使用 unwrappedSelector 。
         if (maybeException instanceof Exception) {
@@ -494,6 +500,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                     case SelectStrategy.SELECT:
                         // 重置 wakenUp 标记为 false
                         // 选择( 查询 )任务
+                        // 1-轮询注册在Channel的IO事件
                         select(wakenUp.getAndSet(false));
 
                         // 'wakenUp.compareAndSet(false, true)' is always evaluated
@@ -539,7 +546,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                 final int ioRatio = this.ioRatio;
                 if (ioRatio == 100) {
                     try {
-                        // 处理 Channel 感兴趣的就绪 IO 事件
+                        // 2-处理 Channel 感兴趣的就绪 IO 事件
                         processSelectedKeys();
                     } finally {
                         // 运行所有普通任务和定时任务，不限制时间
@@ -552,7 +559,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                         // 处理 Channel 感兴趣的就绪 IO 事件
                         processSelectedKeys();
                     } finally {
-                        // 运行所有普通任务和定时任务，限制时间
+                        // 3-运行所有普通任务和定时任务，限制时间
                         // Ensure we always run tasks.
                         final long ioTime = System.nanoTime() - ioStartTime;
                         runAllTasks(ioTime * (100 - ioRatio) / ioRatio);
@@ -863,6 +870,8 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                 // 计算本次 select 的超时时长，单位：毫秒。
                 // + 500000L 是为了四舍五入
                 // / 1000000L 是为了纳秒转为毫秒
+
+                // 1、定时任务截止时间快到了，中断本次轮询
                 long timeoutMillis = (selectDeadLineNanos - currentTimeNanos + 500000L) / 1000000L;
                 // 如果超时时长，则结束 select
                 if (timeoutMillis <= 0) {
@@ -873,6 +882,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                     break;
                 }
 
+                // 2-轮询过程中发现有任务加入，中断本次轮询
                 // If a task was submitted when wakenUp value was true, the task didn't get a chance to call
                 // Selector#wakeup. So we need to check task queue again before executing select operation.
                 // If we don't, the task might be pended until select operation was timed out.
@@ -886,6 +896,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                     break;
                 }
 
+                // 3-阻塞式select操作
                 // 阻塞 select ，查询 Channel 是否有就绪的 IO 事件
                 int selectedKeys = selector.select(timeoutMillis);
                 // select 计数器 ++
@@ -916,6 +927,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                 }
 
                 // 记录当前时间
+                // 4-避免NIO bug
                 long time = System.nanoTime();
                 // 符合 select 超时条件，重置 selectCnt 为 1
                 if (time - TimeUnit.MILLISECONDS.toNanos(timeoutMillis) >= currentTimeNanos) {
